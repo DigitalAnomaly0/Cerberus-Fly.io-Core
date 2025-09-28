@@ -26,10 +26,11 @@ jobs:
 
       - name: Resolve base app name & region
         run: |
-          # Base name from repo variable (defaults to 'cerberus')
-          echo "BASE_APP_NAME=${{ vars.FLY_APP_NAME || 'cerberus' }}" >> $GITHUB_ENV
-          echo "FLY_PRIMARY_REGION=${{ vars.FLY_PRIMARY_REGION || 'ord' }}" >> $GITHUB_ENV
-          echo "Base app name: ${ { vars.FLY_APP_NAME || 'cerberus' } }"
+          BASE_APP_NAME="${{ vars.FLY_APP_NAME || 'cerberus' }}"
+          FLY_PRIMARY_REGION="${{ vars.FLY_PRIMARY_REGION || 'ord' }}"
+          echo "BASE_APP_NAME=$BASE_APP_NAME" >> "$GITHUB_ENV"
+          echo "FLY_PRIMARY_REGION=$FLY_PRIMARY_REGION" >> "$GITHUB_ENV"
+          echo "Base app name: $BASE_APP_NAME"
           echo "Region: $FLY_PRIMARY_REGION"
 
       - name: Show fly.toml BEFORE patch
@@ -59,7 +60,6 @@ jobs:
           BASE="$(echo "$BASE" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9-')"
           if [ -z "$BASE" ]; then BASE="cerberus"; fi
 
-          # helper: try to create; return 0 if created, 2 if "taken", else exit with code
           try_create () {
             local NAME="$1"
             echo "Attempting to create app: $NAME"
@@ -79,7 +79,7 @@ jobs:
             exit $CODE
           }
 
-          # If you already own an app with this exact name, skip creation
+          # Do you already own an app with this exact name?
           if flyctl apps list | awk 'NR>1 {print $1}' | grep -qx "$BASE"; then
             FINAL="$BASE"
             echo "App $FINAL already exists under your account."
@@ -102,7 +102,7 @@ jobs:
             fi
           fi
 
-          echo "FINAL_APP_NAME=$FINAL" >> $GITHUB_ENV
+          echo "FINAL_APP_NAME=$FINAL" >> "$GITHUB_ENV"
 
           # Patch fly.toml with final name & region
           sed -i 's/^app = ".*/app = "'"$FINAL"'"/' fly.toml
