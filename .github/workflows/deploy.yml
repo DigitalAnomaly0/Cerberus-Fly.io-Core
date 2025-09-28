@@ -56,7 +56,7 @@ jobs:
           set -euo pipefail
 
           BASE="${BASE_APP_NAME:-cerberus}"
-          # sanitize to lowercase/hyphen/numbers just in case
+          # sanitize to lowercase/hyphen/numbers
           BASE="$(echo "$BASE" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9-')"
           if [ -z "$BASE" ]; then BASE="cerberus"; fi
 
@@ -80,7 +80,7 @@ jobs:
           }
 
           # Do you already own an app with this exact name?
-          if flyctl apps list | awk 'NR>1 {print $1}' | grep -qx "$BASE"; then
+          if flyctl apps list | tail -n +2 | awk '{print $1}' | grep -qx "$BASE"; then
             FINAL="$BASE"
             echo "App $FINAL already exists under your account."
           else
@@ -89,8 +89,13 @@ jobs:
             else
               RC=$?
               if [ $RC -eq 2 ]; then
-                # Taken globally → add random 10-char lowercase/number suffix
-                RAND="$(tr -dc 'a-z0-9' </dev/urandom | head -c 10)"
+                # Taken globally → add random 10-char suffix via Python (no pipes, no SIGPIPE)
+                RAND="$(python3 - <<'PY'
+import secrets, string
+alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789'
+print(''.join(secrets.choice(alphabet) for _ in range(10)))
+PY
+)"
                 FINAL="${BASE}-${RAND}"
                 echo "Name taken. Retrying with: $FINAL"
                 NAME=$(try_create "$FINAL") || { echo "::error::Failed to create even with suffix."; exit 3; }
