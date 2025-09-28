@@ -1,4 +1,3 @@
-# fly.toml
 app = "fly-io-integration"
 primary_region = "ord"
 
@@ -25,15 +24,12 @@ primary_region = "ord"
     hard_limit = 50
     soft_limit = 25
 
-  # ✅ Service-level HTTP health check
   [[services.http_checks]]
     interval = "10s"
     timeout = "2s"
     grace_period = "10s"
     method = "GET"
     path = "/health"
-    # If your app redirects HTTP->HTTPS, uncomment next line:
-    # headers = { "X-Forwarded-Proto" = "https" }
 
 [[vm]]
   size = "shared-cpu-1x"
