@@ -1,13 +1,9 @@
-name: Deploy to Fly.io (Personal)
+name: Deploy to Fly.io (DIAGNOSTIC)
 
 on:
+  workflow_dispatch:
   push:
     branches: [ "main" ]
-    tags:
-      - 'v*'
-  release:
-    types: [published]
-  workflow_dispatch:
 
 jobs:
   deploy:
@@ -17,84 +13,84 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Print runner context
+        run: |
+          echo "GITHUB_REF=$GITHUB_REF"
+          echo "GITHUB_SHA=$GITHUB_SHA"
+
       - name: Verify Fly token is present
         run: |
           if [ -z "${{ secrets.FLY_API_TOKEN }}" ]; then
-            echo "FLY_API_TOKEN secret is missing. Add it under Settings → Secrets and variables → Actions."
+            echo "FLY_API_TOKEN secret is missing (Settings → Secrets and variables → Actions)."
             exit 1
           fi
+          echo "FLY_API_TOKEN is set."
 
-      - name: Resolve app & region (repo Variables → defaults)
+      - name: Resolve app & region (from repo Variables)
         run: |
-          echo "FLY_APP_NAME=${{ vars.FLY_APP_NAME || 'cerberus' }}" >> $GITHUB_ENV
+          echo "FLY_APP_NAME=${{ vars.FLY_APP_NAME || 'cerberus-sam-001' }}" >> $GITHUB_ENV
           echo "FLY_PRIMARY_REGION=${{ vars.FLY_PRIMARY_REGION || 'ord' }}" >> $GITHUB_ENV
-          echo "App: $FLY_APP_NAME"
-          echo "Region: $FLY_PRIMARY_REGION"
+          echo "Resolved FLY_APP_NAME=$FLY_APP_NAME"
+          echo "Resolved FLY_PRIMARY_REGION=$FLY_PRIMARY_REGION"
 
-      - name: Patch fly.toml with app name & region
+      - name: Show fly.toml BEFORE patch
         run: |
+          echo "----- fly.toml (before) -----"
+          sed -n '1,120p' fly.toml || true
+
+      - name: Patch fly.toml with app name & region (diagnostic)
+        run: |
+          set -euxo pipefail
           sed -i 's/^app = ".*/app = "'"$FLY_APP_NAME"'"/' fly.toml
           sed -i 's/^primary_region = ".*/primary_region = "'"$FLY_PRIMARY_REGION"'"/' fly.toml
-          echo "fly.toml patched:"
+          echo "----- fly.toml (after) -----"
           grep -E '^(app|primary_region)' fly.toml || true
 
       - name: Setup Flyctl
         uses: superfly/flyctl-actions/setup-flyctl@master
 
-      - name: Show orgs (diagnostic)
+      - name: Who am I? Which orgs?
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
+          set -euxo pipefail
+          flyctl version
+          echo "----- flyctl auth whoami -----"
+          flyctl auth whoami || true
+          echo "----- flyctl orgs list -----"
           flyctl orgs list || true
 
-      # PERSONAL: create without --org; will succeed only if name is free or you already own it in Personal
-      - name: Create app if missing (Personal owner)
+      - name: Which apps does this token see?
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
-          set -e
-          if flyctl apps show "$FLY_APP_NAME" >/dev/null 2>&1; then
-            echo "App $FLY_APP_NAME already exists under your account."
-          else
-            echo "Creating app $FLY_APP_NAME under your Personal org..."
-            flyctl apps create "$FLY_APP_NAME"
-          fi
+          set -euxo pipefail
+          echo "----- flyctl apps list -----"
+          flyctl apps list || true
+          echo "Trying to show target app: $FLY_APP_NAME"
+          flyctl apps show "$FLY_APP_NAME" || echo "apps show FAILED (expected if app doesn't exist yet)"
 
-      - name: Verify app is accessible
+      - name: Attempt to create app (loud; personal owner)
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
-          set -e
-          flyctl apps show "$FLY_APP_NAME"
-          echo "OK: App is accessible."
+          set -euxo pipefail
+          echo "Creating (or confirming) app: $FLY_APP_NAME"
+          # If it already exists under this account, this will fail harmlessly; we ignore with || true
+          flyctl apps create "$FLY_APP_NAME" || true
+          echo "Re-check:"
+          flyctl apps show "$FLY_APP_NAME" || (echo "Still cannot see app $FLY_APP_NAME" && exit 2)
 
-      - name: Set Fly secrets (idempotent)
+      - name: Dry-run deploy prechecks (no image build)
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
-          ARGS=""
-          [ -n "${{ secrets.CERBERUS_API_KEY }}" ]  && ARGS="$ARGS CERBERUS_API_KEY=${{ secrets.CERBERUS_API_KEY }}"
-          [ -n "${{ secrets.REQUIRE_TIMESTAMP }}" ] && ARGS="$ARGS REQUIRE_TIMESTAMP=${{ secrets.REQUIRE_TIMESTAMP }}"
-          [ -n "${{ secrets.GEMINI_API_KEY }}" ]    && ARGS="$ARGS GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}"
-          if [ -n "$ARGS" ]; then
-            flyctl secrets set $ARGS --app "$FLY_APP_NAME"
-          else
-            echo "No app secrets provided; skipping."
-          fi
-
-      - name: Deploy (remote build, verbose)
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-        run: |
-          flyctl version
+          set -euxo pipefail
+          echo "Status (may be empty if first deploy):"
           flyctl status --app "$FLY_APP_NAME" || true
-          flyctl deploy --remote-only --app "$FLY_APP_NAME" --verbose
+          echo "VALIDATE CONFIG:"
+          flyctl config validate -c fly.toml || true
 
-      - name: Output URL
-        run: echo "https://$FLY_APP_NAME.fly.dev" > URL.txt
-
-      - name: Upload URL artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: app-url
-          path: URL.txt
+      - name: STOP HERE (no deploy)
+        run: |
+          echo "Diagnostics complete. Review logs above to identify failure point."
