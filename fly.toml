@@ -1,29 +1,40 @@
+# fly.toml
 app = "fly-io-integration"
 primary_region = "ord"
+
 [build]
   dockerfile = "Dockerfile"
+
 [env]
   PORT = "8080"
+
 [[services]]
   protocol = "tcp"
   internal_port = 8080
   processes = ["app"]
+
   [[services.ports]]
     handlers = ["http"]
     port = 80
+
   [[services.ports]]
     handlers = ["tls", "http"]
     port = 443
+
   [services.concurrency]
     hard_limit = 50
     soft_limit = 25
-[[vm]]
-  size = "shared-cpu-1x"
-  memory = "512mb"
-[checks]
-  [checks.http]
-    port = 8080
-    path = "/health"
+
+  # ✅ Service-level HTTP health check
+  [[services.http_checks]]
     interval = "10s"
     timeout = "2s"
     grace_period = "10s"
+    method = "GET"
+    path = "/health"
+    # If your app redirects HTTP->HTTPS, uncomment next line:
+    # headers = { "X-Forwarded-Proto" = "https" }
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
