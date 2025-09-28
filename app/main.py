@@ -6,6 +6,20 @@ app = FastAPI(title="Cerberus Stateless Runner", version="0.4.0")
 
 API_KEY = os.getenv("CERBERUS_API_KEY", "")
 REQUIRE_TIMESTAMP = os.getenv("REQUIRE_TIMESTAMP", "true").lower() == "true"
+# --- add near the top ---
+from fastapi import Request
+
+# --- add anywhere in the FastAPI route section ---
+@app.post("/debug/echo")
+async def debug_echo(request: Request):
+    body = await request.body()
+    # Return a trimmed view so we don't log huge payloads
+    return {
+        "received_headers": {k: v for k, v in request.headers.items() if k.lower().startswith("x-") or k.lower() in ["content-type", "accept"]},
+        "method": request.method,
+        "url": str(request.url),
+        "body_preview": body[:500].decode("utf-8", errors="ignore"),
+    }
 
 def _require_auth_and_fresh(req: Request):
     if not API_KEY:
