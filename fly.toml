@@ -1,0 +1,21 @@
+# Fly app config
+# NOTE: App names must be lowercase and globally unique. If 'cerberus' is taken, set repo var FLY_APP_NAME to another value.
+app = "cerberus"
+primary_region = "ord"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 50
+    hard_limit = 100
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1
