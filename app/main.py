@@ -132,8 +132,10 @@ async def debug_echo(request: Request):
 async def debug_echo_secure(
     request: Request,
     x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+    x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
 ):
     check_api_key(x_api_key)
+    check_timestamp(x_timestamp)
     body = await request.body()
     return {
         "received_headers": {
