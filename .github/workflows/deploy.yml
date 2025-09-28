@@ -1,9 +1,47 @@
-      - name: Create app (auto-unique, verbose) and patch fly.toml
+name: Deploy to Fly.io (Auto-Name)
+
+on:
+  push:
+    branches:
+      - main
+  release:
+    types:
+      - published
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify Fly token is present
+        run: |
+          if [ -z "${{ secrets.FLY_API_TOKEN }}" ]; then
+            echo "FLY_API_TOKEN secret is missing (Settings → Secrets and variables → Actions)."
+            exit 1
+          fi
+
+      - name: Resolve base app name & region
+        run: |
+          BASE_APP_NAME="${{ vars.FLY_APP_NAME || 'cerberus' }}"
+          FLY_PRIMARY_REGION="${{ vars.FLY_PRIMARY_REGION || 'ord' }}"
+          echo "BASE_APP_NAME=$BASE_APP_NAME" >> "$GITHUB_ENV"
+          echo "FLY_PRIMARY_REGION=$FLY_PRIMARY_REGION" >> "$GITHUB_ENV"
+          echo "Base app name: $BASE_APP_NAME"
+          echo "Region: $FLY_PRIMARY_REGION"
+
+      - name: Setup Flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Create app (auto-unique if taken) and patch fly.toml
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
           set -euo pipefail
 
+          # sanitize base
           BASE="${BASE_APP_NAME:-cerberus}"
           BASE="$(echo "$BASE" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9-')"
           if [ -z "$BASE" ]; then BASE="cerberus"; fi
@@ -12,7 +50,6 @@
             local NAME="$1"
             echo "Attempting to create app: $NAME"
             set +e
-            # Use --verbose and capture both stdout/stderr
             OUT=$(flyctl --verbose apps create "$NAME" 2>&1)
             CODE=$?
             set -e
@@ -23,19 +60,17 @@
               echo "$NAME"
               return 0
             fi
-            # Name taken → Fly often says this exact phrase
             if echo "$OUT" | grep -qi "Not authorized to deploy this app"; then
-              return 2
+              return 2  # name taken globally
             fi
-            # Quotas / verification / suspended org patterns (don’t fail silently)
             if echo "$OUT" | grep -Eqi "suspend|trial|verification|payment|quota|limit"; then
-              echo "::error::Fly rejected app creation due to account/org status: see output above."
+              echo "::error::Fly rejected creation due to account/org status. See output above."
               return 9
             fi
             return $CODE
           }
 
-          # Already owned?
+          # already owned?
           if flyctl apps list | tail -n +2 | awk '{print $1}' | grep -qx "$BASE"; then
             FINAL="$BASE"
             echo "App $FINAL already exists under your account."
@@ -45,14 +80,13 @@
             else
               RC=$?
               if [ $RC -eq 2 ]; then
-                # Name taken → add random suffix with python (no pipes)
-                RAND="$(python3 -c "import secrets,string; a='abcdefghijklmnopqrstuvwxyz0123456789'; print(''.join(secrets.choice(a) for _ in range(12)))")"
+                # generate 12-char suffix safely (no pipes)
+                RAND="$(python3 -c "import secrets; import string as s; a='abcdefghijklmnopqrstuvwxyz0123456789'; print(''.join(secrets.choice(a) for _ in range(12)))")"
                 FINAL="${BASE}-${RAND}"
                 echo "Name taken. Retrying with: $FINAL"
-                NAME=$(try_create "$FINAL") || { echo "::error::Failed to create even with suffix (see output above)."; exit 3; }
+                NAME=$(try_create "$FINAL") || { echo "::error::Failed to create even with suffix. See output above."; exit 3; }
                 FINAL="$NAME"
               elif [ $RC -eq 9 ]; then
-                echo "::error::Account/org may need verification or has hit a limit. Resolve in Fly dashboard, then rerun."
                 exit 9
               else
                 echo "::error::flyctl create failed (code $RC). See output above."
@@ -63,9 +97,41 @@
 
           echo "FINAL_APP_NAME=$FINAL" >> "$GITHUB_ENV"
 
-          # Patch fly.toml with final name & region
-          sed -i 's/^app = ".*/app = "'"$FINAL"'"/' fly.toml
-          sed -i 's/^primary_region = ".*/primary_region = "'"$FLY_PRIMARY_REGION"'"/' fly.toml
+          # Patch fly.toml
+          sed -i 's/^app = ".*/app = "'"$FINAL"'"/' fly.toml || true
+          sed -i 's/^primary_region = ".*/primary_region = "'"$FLY_PRIMARY_REGION"'"/' fly.toml || true
+          echo "fly.toml app/region set to: $FINAL / $FLY_PRIMARY_REGION"
 
-          echo "----- fly.toml (after) -----"
-          grep -E '^(app|primary_region)' fly.toml || true
+      - name: Set Fly secrets (idempotent)
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          APP="${FINAL_APP_NAME:-$BASE_APP_NAME}"
+          ARGS=""
+          [ -n "${{ secrets.CERBERUS_API_KEY }}" ]  && ARGS="$ARGS CERBERUS_API_KEY=${{ secrets.CERBERUS_API_KEY }}"
+          [ -n "${{ secrets.REQUIRE_TIMESTAMP }}" ] && ARGS="$ARGS REQUIRE_TIMESTAMP=${{ secrets.REQUIRE_TIMESTAMP }}"
+          [ -n "${{ secrets.GEMINI_API_KEY }}" ]    && ARGS="$ARGS GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}"
+          if [ -n "$ARGS" ]; then
+            flyctl secrets set $ARGS --app "$APP"
+          else
+            echo "No app secrets provided; skipping."
+          fi
+
+      - name: Deploy (remote build, verbose)
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          APP="${FINAL_APP_NAME:-$BASE_APP_NAME}"
+          flyctl deploy --remote-only --app "$APP" --verbose
+
+      - name: Output URL
+        run: |
+          APP="${FINAL_APP_NAME:-$BASE_APP_NAME}"
+          echo "https://$APP.fly.dev" > URL.txt
+          cat URL.txt
+
+      - name: Upload URL artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-url
+          path: URL.txt
