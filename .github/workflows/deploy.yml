@@ -8,63 +8,67 @@ on:
   release:
     types: [published]
   workflow_dispatch:
-    inputs:
-      target_env:
-        type: choice
-        description: Which environment? (optional)
-        default: prod
-        options: [prod, staging]
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    # If you use envs, uncomment the next line and set it to ${{ inputs.target_env || 'prod' }}
-    # environment: ${{ inputs.target_env || 'prod' }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Resolve app & region
+      - name: Verify Fly token is present
+        run: |
+          if [ -z "${{ secrets.FLY_API_TOKEN }}" ]; then
+            echo "FLY_API_TOKEN secret is missing. Add it under Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+
+      - name: Resolve app & region (from repo Variables, with safe defaults)
         run: |
           echo "FLY_APP_NAME=${{ vars.FLY_APP_NAME || 'cerberus' }}" >> $GITHUB_ENV
           echo "FLY_PRIMARY_REGION=${{ vars.FLY_PRIMARY_REGION || 'ord' }}" >> $GITHUB_ENV
           echo "App: $FLY_APP_NAME"
           echo "Region: $FLY_PRIMARY_REGION"
 
-      - name: Patch fly.toml
+      - name: Patch fly.toml with app name & region
         run: |
           sed -i 's/^app = ".*/app = "'"$FLY_APP_NAME"'"/' fly.toml
           sed -i 's/^primary_region = ".*/primary_region = "'"$FLY_PRIMARY_REGION"'"/' fly.toml
+          echo "fly.toml patched:"
+          grep -E '^(app|primary_region)' fly.toml
 
       - name: Setup Flyctl
         uses: superfly/flyctl-actions/setup-flyctl@master
 
-      - name: Ensure app exists
+      - name: Create app if missing (loud)
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
-          flyctl apps show "$FLY_APP_NAME" >/dev/null 2>&1 || flyctl apps create "$FLY_APP_NAME"
-
-      - name: Set Fly secrets (idempotent)
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-        run: |
-          ARGS=""
-          [ -n "${{ secrets.CERBERUS_API_KEY }}" ]  && ARGS="$ARGS CERBERUS_API_KEY=${{ secrets.CERBERUS_API_KEY }}"
-          [ -n "${{ secrets.REQUIRE_TIMESTAMP }}" ] && ARGS="$ARGS REQUIRE_TIMESTAMP=${{ secrets.REQUIRE_TIMESTAMP }}"
-          [ -n "${{ secrets.GEMINI_API_KEY }}" ]    && ARGS="$ARGS GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}"
-          if [ -n "$ARGS" ]; then
-            flyctl secrets set $ARGS --app "$FLY_APP_NAME"
+          set -e
+          if flyctl apps show "$FLY_APP_NAME" >/dev/null 2>&1; then
+            echo "App $FLY_APP_NAME already exists."
           else
-            echo "No secrets provided; skipping."
+            echo "Creating app $FLY_APP_NAME ..."
+            # This will FAIL clearly if the name is globally taken by someone else
+            flyctl apps create "$FLY_APP_NAME"
           fi
 
-      - name: Deploy (remote build)
+      - name: Verify app is accessible
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
-          flyctl deploy --remote-only --app "$FLY_APP_NAME"
+          set -e
+          flyctl apps show "$FLY_APP_NAME"
+          echo "OK: App is accessible."
+
+      - name: Deploy (remote build, verbose)
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          flyctl version
+          flyctl status --app "$FLY_APP_NAME" || true
+          flyctl deploy --remote-only --app "$FLY_APP_NAME" --verbose
 
       - name: Output URL
         run: echo "https://$FLY_APP_NAME.fly.dev" > URL.txt
