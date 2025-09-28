@@ -1,21 +1,23 @@
-# Fly app config
-# NOTE: App names must be lowercase and globally unique. If 'cerberus' is taken, set repo var FLY_APP_NAME to another value.
-app = "cerberus"
-primary_region = "ord"
+# fly.toml app configuration file generated for fly-io-integration on 2025-09-28T14:19:09Z
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'fly-io-integration'
+primary_region = 'ord'
+
+[build]
 
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = "stop"
+  auto_stop_machines = 'stop'
   auto_start_machines = true
   min_machines_running = 0
-
-  [http_service.concurrency]
-    type = "requests"
-    soft_limit = 50
-    hard_limit = 100
+  processes = ['app']
 
 [[vm]]
-  memory = "512mb"
-  cpu_kind = "shared"
+  memory = '512mb'
+  cpu_kind = 'shared'
   cpus = 1
+  memory_mb = 512
