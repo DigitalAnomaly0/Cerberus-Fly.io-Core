@@ -1,62 +1,10 @@
-name: Deploy to Fly.io (Auto-Name)
-
-on:
-  push:
-    branches: [ "main" ]
-    tags:
-      - 'v*'
-  release:
-    types: [published]
-  workflow_dispatch:
-
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Verify Fly token is present
-        run: |
-          if [ -z "${{ secrets.FLY_API_TOKEN }}" ]; then
-            echo "FLY_API_TOKEN secret is missing (Settings → Secrets and variables → Actions)."
-            exit 1
-          fi
-
-      - name: Resolve base app name & region
-        run: |
-          BASE_APP_NAME="${{ vars.FLY_APP_NAME || 'cerberus' }}"
-          FLY_PRIMARY_REGION="${{ vars.FLY_PRIMARY_REGION || 'ord' }}"
-          echo "BASE_APP_NAME=$BASE_APP_NAME" >> "$GITHUB_ENV"
-          echo "FLY_PRIMARY_REGION=$FLY_PRIMARY_REGION" >> "$GITHUB_ENV"
-          echo "Base app name: $BASE_APP_NAME"
-          echo "Region: $FLY_PRIMARY_REGION"
-
-      - name: Show fly.toml BEFORE patch
-        run: |
-          echo "----- fly.toml (before) -----"
-          sed -n '1,120p' fly.toml || true
-
-      - name: Setup Flyctl
-        uses: superfly/flyctl-actions/setup-flyctl@master
-
-      - name: Who am I / orgs (diag)
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-        run: |
-          flyctl version
-          flyctl auth whoami || true
-          flyctl orgs list || true
-
-      - name: Create app (auto-unique if taken) and patch fly.toml
+      - name: Create app (auto-unique, verbose) and patch fly.toml
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
           set -euo pipefail
 
           BASE="${BASE_APP_NAME:-cerberus}"
-          # sanitize to lowercase/hyphen/numbers
           BASE="$(echo "$BASE" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9-')"
           if [ -z "$BASE" ]; then BASE="cerberus"; fi
 
@@ -64,22 +12,30 @@ jobs:
             local NAME="$1"
             echo "Attempting to create app: $NAME"
             set +e
-            OUT=$(flyctl apps create "$NAME" 2>&1)
+            # Use --verbose and capture both stdout/stderr
+            OUT=$(flyctl --verbose apps create "$NAME" 2>&1)
             CODE=$?
             set -e
+            echo "----- flyctl output (create $NAME) -----"
             echo "$OUT"
+            echo "----- exit code: $CODE -----"
             if [ $CODE -eq 0 ]; then
               echo "$NAME"
               return 0
             fi
+            # Name taken → Fly often says this exact phrase
             if echo "$OUT" | grep -qi "Not authorized to deploy this app"; then
-              # Fly's message for "name is already taken globally"
               return 2
             fi
-            exit $CODE
+            # Quotas / verification / suspended org patterns (don’t fail silently)
+            if echo "$OUT" | grep -Eqi "suspend|trial|verification|payment|quota|limit"; then
+              echo "::error::Fly rejected app creation due to account/org status: see output above."
+              return 9
+            fi
+            return $CODE
           }
 
-          # Do you already own an app with this exact name?
+          # Already owned?
           if flyctl apps list | tail -n +2 | awk '{print $1}' | grep -qx "$BASE"; then
             FINAL="$BASE"
             echo "App $FINAL already exists under your account."
@@ -89,14 +45,17 @@ jobs:
             else
               RC=$?
               if [ $RC -eq 2 ]; then
-                # Taken globally → add random 10-char suffix (Python one-liner; no heredoc)
-                RAND="$(python3 -c "import secrets,string; a='abcdefghijklmnopqrstuvwxyz0123456789'; print(''.join(secrets.choice(a) for _ in range(10)))")"
+                # Name taken → add random suffix with python (no pipes)
+                RAND="$(python3 -c "import secrets,string; a='abcdefghijklmnopqrstuvwxyz0123456789'; print(''.join(secrets.choice(a) for _ in range(12)))")"
                 FINAL="${BASE}-${RAND}"
                 echo "Name taken. Retrying with: $FINAL"
-                NAME=$(try_create "$FINAL") || { echo "::error::Failed to create even with suffix."; exit 3; }
+                NAME=$(try_create "$FINAL") || { echo "::error::Failed to create even with suffix (see output above)."; exit 3; }
                 FINAL="$NAME"
+              elif [ $RC -eq 9 ]; then
+                echo "::error::Account/org may need verification or has hit a limit. Resolve in Fly dashboard, then rerun."
+                exit 9
               else
-                echo "::error::flyctl create failed with code $RC"
+                echo "::error::flyctl create failed (code $RC). See output above."
                 exit $RC
               fi
             fi
@@ -110,37 +69,3 @@ jobs:
 
           echo "----- fly.toml (after) -----"
           grep -E '^(app|primary_region)' fly.toml || true
-
-      - name: Set Fly secrets (idempotent)
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-        run: |
-          APP="${FINAL_APP_NAME:-$BASE_APP_NAME}"
-          ARGS=""
-          [ -n "${{ secrets.CERBERUS_API_KEY }}" ]  && ARGS="$ARGS CERBERUS_API_KEY=${{ secrets.CERBERUS_API_KEY }}"
-          [ -n "${{ secrets.REQUIRE_TIMESTAMP }}" ] && ARGS="$ARGS REQUIRE_TIMESTAMP=${{ secrets.REQUIRE_TIMESTAMP }}"
-          [ -n "${{ secrets.GEMINI_API_KEY }}" ]    && ARGS="$ARGS GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}"
-          if [ -n "$ARGS" ]; then
-            flyctl secrets set $ARGS --app "$APP"
-          else
-            echo "No app secrets provided; skipping."
-          fi
-
-      - name: Deploy (remote build, verbose)
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-        run: |
-          APP="${FINAL_APP_NAME:-$BASE_APP_NAME}"
-          flyctl deploy --remote-only --app "$APP" --verbose
-
-      - name: Output URL
-        run: |
-          APP="${FINAL_APP_NAME:-$BASE_APP_NAME}"
-          echo "https://$APP.fly.dev" > URL.txt
-          cat URL.txt
-
-      - name: Upload URL artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: app-url
-          path: URL.txt
