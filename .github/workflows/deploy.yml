@@ -89,13 +89,8 @@ jobs:
             else
               RC=$?
               if [ $RC -eq 2 ]; then
-                # Taken globally → add random 10-char suffix via Python (no pipes, no SIGPIPE)
-                RAND="$(python3 - <<'PY'
-import secrets, string
-alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789'
-print(''.join(secrets.choice(alphabet) for _ in range(10)))
-PY
-)"
+                # Taken globally → add random 10-char suffix (Python one-liner; no heredoc)
+                RAND="$(python3 -c "import secrets,string; a='abcdefghijklmnopqrstuvwxyz0123456789'; print(''.join(secrets.choice(a) for _ in range(10)))")"
                 FINAL="${BASE}-${RAND}"
                 echo "Name taken. Retrying with: $FINAL"
                 NAME=$(try_create "$FINAL") || { echo "::error::Failed to create even with suffix."; exit 3; }
