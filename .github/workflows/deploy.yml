@@ -42,7 +42,8 @@ jobs:
         uses: superfly/flyctl-actions/setup-flyctl@master
 
       - name: Who am I / orgs (diag)
-        env: { FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }} }
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
           flyctl version
           flyctl auth whoami || true
@@ -50,7 +51,8 @@ jobs:
 
       # Create app if missing; if name is taken globally, fail with a clear message
       - name: Create app if missing (Personal)
-        env: { FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }} }
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
           set -e
           if flyctl apps list | awk '{print $1}' | grep -qx "$FLY_APP_NAME"; then
@@ -72,7 +74,8 @@ jobs:
           fi
 
       - name: Set Fly secrets (idempotent)
-        env: { FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }} }
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
           ARGS=""
           [ -n "${{ secrets.CERBERUS_API_KEY }}" ]  && ARGS="$ARGS CERBERUS_API_KEY=${{ secrets.CERBERUS_API_KEY }}"
@@ -85,7 +88,8 @@ jobs:
           fi
 
       - name: Deploy (remote build, verbose)
-        env: { FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }} }
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
           flyctl deploy --remote-only --app "$FLY_APP_NAME" --verbose
 
