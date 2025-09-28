@@ -3,7 +3,7 @@ info:
   title: Cerberus Runner (ChatGPT + Gemini)
   version: "0.4.2"
 servers:
-  - url: https://YOUR_APP_HOST
+  - url: https:////fly-io-integration.fly.dev
 paths: {}
 components:
   securitySchemes:
