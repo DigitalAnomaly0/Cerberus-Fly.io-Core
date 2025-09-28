@@ -46,7 +46,7 @@ TS_SKEW_SEC = int(os.getenv("TIMESTAMP_SKEW_SECONDS", "300"))
 class RunJobRequest(BaseModel):
     run_id: Optional[str] = None
     stage: str = Field(default="synthesis")
-    payload: Dict[str, Any] = Field(default_factory=dict)
+    payload: Dict[str, Any]
 
 class Artifact(BaseModel):
     filename: str
