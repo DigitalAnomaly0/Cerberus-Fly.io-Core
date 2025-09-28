@@ -1,12 +1,8 @@
-name: Deploy to Fly.io (Auto-Name + Org)
+name: Deploy to Fly.io (Reuse Existing App)
 
 on:
   push:
-    branches:
-      - main
-  release:
-    types:
-      - published
+    branches: [ "main" ]
   workflow_dispatch:
 
 jobs:
@@ -23,131 +19,38 @@ jobs:
             exit 1
           fi
 
-      - name: Resolve base app name & region
+      - name: Resolve app & region
         run: |
-          BASE_APP_NAME="${{ vars.FLY_APP_NAME || 'skn-run' }}"
-          FLY_PRIMARY_REGION="${{ vars.FLY_PRIMARY_REGION || 'ord' }}"
-          echo "BASE_APP_NAME=$BASE_APP_NAME" >> "$GITHUB_ENV"
-          echo "FLY_PRIMARY_REGION=$FLY_PRIMARY_REGION" >> "$GITHUB_ENV"
-          echo "Base app name: $BASE_APP_NAME"
-          echo "Region: $FLY_PRIMARY_REGION"
+          APP="${{ vars.FLY_APP_NAME || 'fly-io-integration' }}"
+          REGION="${{ vars.FLY_PRIMARY_REGION || 'ord' }}"
+          echo "APP=$APP" >> "$GITHUB_ENV"
+          echo "REGION=$REGION" >> "$GITHUB_ENV"
+          echo "Using app: $APP  region: $REGION"
 
       - name: Setup Flyctl
         uses: superfly/flyctl-actions/setup-flyctl@master
 
-      - name: Who am I / orgs / apps (diag)
+      - name: Confirm app exists and you own it
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
-          flyctl version
-          echo "----- whoami -----"
-          flyctl auth whoami || true
-          echo "----- orgs list -----"
-          flyctl orgs list || true
-          echo "----- apps list -----"
-          flyctl apps list || true
+          set -e
+          # Ensure it's in your app list
+          flyctl apps list | awk 'NR>1 {print $1}' | grep -qx "$APP" || { echo "::error::App $APP not in your account."; exit 2; }
+          echo "App $APP is in your account."
 
-      - name: Create app (auto-unique, org=personal) and patch fly.toml
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      - name: Patch fly.toml (optional)
         run: |
-          set -euo pipefail
-
-          org_slug="personal"   # your Personal org slug
-          base="${BASE_APP_NAME:-skn-run}"
-          # sanitize
-          sanitize () { echo "$1" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9-'; }
-          base="$(sanitize "$base")"
-          if [ -z "$base" ]; then base="skn-run"; fi
-
-          rand () {
-            python3 -c "import secrets; a='abcdefghijklmnopqrstuvwxyz0123456789'; print(''.join(secrets.choice(a) for _ in range($1)))"
-          }
-
-          try_create () {
-            local name="$1"
-            echo "Attempting to create app in org '$org_slug': $name"
-            set +e
-            out=$(flyctl --verbose apps create "$name" --org "$org_slug" 2>&1)
-            code=$?
-            set -e
-            echo "----- flyctl output (create $name) -----"
-            echo "$out"
-            echo "----- exit code: $code -----"
-            if [ $code -eq 0 ]; then
-              echo "$name"
-              return 0
-            fi
-            # Most common "name taken" text:
-            if echo "$out" | grep -qi "Not authorized to deploy this app"; then
-              return 2
-            fi
-            # Quota / verification / payment / limit / suspended
-            if echo "$out" | grep -Eqi "suspend|trial|verification|payment|quota|limit"; then
-              echo "::error::Fly rejected creation due to account/org status. See output above."
-              return 9
-            fi
-            return $code
-          }
-
-          # If you already own this exact name, use it.
-          if flyctl apps list | tail -n +2 | awk '{print $1}' | grep -qx "$base"; then
-            final="$base"
-            echo "App $final already exists under your account."
-          else
-            # Attempt #1: the base
-            if name=$(try_create "$base"); then
-              final="$name"
-            else
-              rc=$?
-              if [ $rc -eq 2 ]; then
-                # Attempt #2: base + 12 char random suffix
-                suffix="$(rand 12)"
-                candidate="${base}-${suffix}"
-                echo "Base name taken. Retrying with: $candidate"
-                if name=$(try_create "$candidate"); then
-                  final="$name"
-                else
-                  rc2=$?
-                  if [ $rc2 -eq 2 ]; then
-                    # Attempt #3: fully random neutral prefix to avoid any reserved/blocked tokens
-                    candidate="skn-$(rand 16)"
-                    echo "Second name taken. Retrying with fully random: $candidate"
-                    name=$(try_create "$candidate") || { echo "::error::Failed to create even with random candidate. See output above."; exit 3; }
-                    final="$name"
-                  elif [ $rc2 -eq 9 ]; then
-                    echo "::error::Account/org appears limited (trial/quota/billing/verification). Fix in Fly dashboard, then re-run."
-                    exit 9
-                  else
-                    echo "::error::flyctl create failed (code $rc2). See output above."
-                    exit $rc2
-                  fi
-                fi
-              elif [ $rc -eq 9 ]; then
-                echo "::error::Account/org appears limited (trial/quota/billing/verification). Fix in Fly dashboard, then re-run."
-                exit 9
-              else
-                echo "::error::flyctl create failed (code $rc). See output above."
-                exit $rc
-              fi
-            fi
-          fi
-
-          echo "FINAL_APP_NAME=$final" >> "$GITHUB_ENV"
-          echo "Using app: $final"
-
-          # Patch fly.toml (if present)
           if [ -f fly.toml ]; then
-            sed -i 's/^app = ".*/app = "'"$final"'"/' fly.toml || true
-            sed -i 's/^primary_region = ".*/primary_region = "'"$FLY_PRIMARY_REGION"'"/' fly.toml || true
-            echo "fly.toml app/region set to: $final / $FLY_PRIMARY_REGION"
+            sed -i 's/^app = ".*/app = "'"$APP"'"/' fly.toml || true
+            sed -i 's/^primary_region = ".*/primary_region = "'"$REGION"'"/' fly.toml || true
+            echo "fly.toml app/region set to: $APP / $REGION"
           fi
 
       - name: Set Fly secrets (idempotent)
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
-          APP="${FINAL_APP_NAME:-$BASE_APP_NAME}"
           ARGS=""
           [ -n "${{ secrets.CERBERUS_API_KEY }}" ]  && ARGS="$ARGS CERBERUS_API_KEY=${{ secrets.CERBERUS_API_KEY }}"
           [ -n "${{ secrets.REQUIRE_TIMESTAMP }}" ] && ARGS="$ARGS REQUIRE_TIMESTAMP=${{ secrets.REQUIRE_TIMESTAMP }}"
@@ -162,12 +65,10 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
-          APP="${FINAL_APP_NAME:-$BASE_APP_NAME}"
           flyctl deploy --remote-only --app "$APP" --verbose
 
       - name: Output URL
         run: |
-          APP="${FINAL_APP_NAME:-$BASE_APP_NAME}"
           echo "https://$APP.fly.dev" > URL.txt
           cat URL.txt
 
