@@ -39,42 +39,31 @@ jobs:
         run: |
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      # ---- PRIME WORKSPACE so quick_contract has P3-core-wiring-* to read ----
       - name: Prime workspace artifact for quick_contract
         env:
           SEARCH_PROVIDER: dummy
         run: |
           python - <<'PY'
-          import io, os, base64, zipfile
+          import io, base64, zipfile, sys
           from pathlib import Path
-          # Make sure repo root is importable
-          import sys; sys.path.insert(0, str(Path(".").resolve()))
-          try:
-              from jobs.worker import process_job
-          except Exception as e:
-              print("Import error:", e)
-              raise
+          sys.path.insert(0, str(Path(".").resolve()))
+          from jobs.worker import process_job
           Path("workspace").mkdir(exist_ok=True)
-          resp = process_job({
-              "job_name": "core",
-              "args": {
-                  "topic": "CI prime",
-                  "n": 2,
-                  "enable_research": True,
-                  "search_max": 2,
-                  "fetch_max": 0,
-                  "n_per_claim": 1
-              }
-          })
+          resp = process_job({"job_name":"core","args":{"topic":"CI prime","n":2,"enable_research":True,"search_max":2,"fetch_max":0,"n_per_claim":1}})
           arts = resp.get("artifacts", [])
           if arts:
-              b = base64.b64decode(arts[0].get("base64",""))
-              with zipfile.ZipFile(io.BytesIO(b)) as z:
+              data = base64.b64decode(arts[0].get("base64",""))
+              with zipfile.ZipFile(io.BytesIO(data)) as z:
                   z.extractall("workspace")
               print("Primed workspace with artifact contents.")
           else:
               print("No artifacts produced; continuing anyway.")
           PY
+
+      - name: Show workspace listing
+        run: |
+          echo "--- workspace tree ---"
+          find workspace -maxdepth 2 -type f -print || true
 
       - name: Run contract tests + smoke
         env:
@@ -82,12 +71,13 @@ jobs:
         run: |
           python tests/run_all.py
 
-      - name: Upload smoke artifact
+      - name: Upload test artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: cerberus-contract-artifact
+          name: cerberus-tests
           path: |
+            workspace/**
             contract_artifact_*.zip
             cerberus_core--RID-*.zip
             **/contract_artifact_*.zip
@@ -105,6 +95,15 @@ jobs:
       - name: Setup Flyctl
         uses: superfly/flyctl-actions/setup-flyctl@master
 
+      - name: Check required environment vars
+        run: |
+          echo "FLY_APP_NAME=${{ vars.FLY_APP_NAME }}"
+          echo "FLY_PRIMARY_REGION=${{ vars.FLY_PRIMARY_REGION }}"
+          if [ -z "${{ vars.FLY_APP_NAME }}" ]; then
+            echo "::error::Set FLY_APP_NAME in the 'staging' environment."
+            exit 1
+          fi
+
       - name: Configure Fly secrets (staging)
         env:
           FLYCTL_AUTH_TOKEN: ${{ secrets.FLY_API_TOKEN }}
@@ -121,34 +120,41 @@ jobs:
         run: |
           flyctl deploy --remote-only --app '${{ vars.FLY_APP_NAME }}'
 
-      - name: Smoke: /healthz
+      - name: Smoke: /healthz (verbose)
         run: |
-          curl -fsS "https://${{ vars.FLY_APP_NAME }}.fly.dev/healthz"
+          URL="https://${{ vars.FLY_APP_NAME }}.fly.dev/healthz"
+          echo "GET $URL"
+          (curl -sv "$URL" -o healthz.json -w "\nHTTP %{http_code}\n") 2>curl_healthz.debug || true
+          cat healthz.json || true
 
-      - name: Smoke: /jobs/run
+      - name: Smoke: /jobs/run (verbose)
         env:
           API_KEY: ${{ secrets.CERBERUS_API_KEY }}
         run: |
           TS=$(date +%s)
-          cat > body.json <<'JSON'
-          {
-            "job_name": "core",
-            "args": {
-              "topic": "CI smoke",
-              "n": 3,
-              "enable_research": true,
-              "search_max": 6,
-              "fetch_max": 0,
-              "n_per_claim": 1,
-              "timestamp": __TS__
-            }
-          }
+          cat > body.json <<JSON
+          {"job_name":"core","args":{"topic":"CI smoke","n":3,"enable_research":true,"search_max":6,"fetch_max":0,"n_per_claim":1,"timestamp":$TS}}
           JSON
-          sed -i "s/__TS__/$TS/" body.json
-          curl -fsS -X POST "https://${{ vars.FLY_APP_NAME }}.fly.dev/jobs/run" \
-            -H "content-type: application/json" \
-            -H "X-API-Key: ${API_KEY}" \
-            --data-binary @body.json >/dev/null
+          URL="https://${{ vars.FLY_APP_NAME }}.fly.dev/jobs/run"
+          echo "POST $URL"
+          (curl -sv -X POST "$URL" \
+             -H "content-type: application/json" \
+             -H "X-API-Key: ${API_KEY}" \
+             --data-binary @body.json \
+             -o job.json -w "\nHTTP %{http_code}\n") 2>curl_job.debug || true
+          head -c 2000 job.json || true
+
+      - name: Upload smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cerberus-staging-smoke
+          path: |
+            healthz.json
+            job.json
+            body.json
+            curl_healthz.debug
+            curl_job.debug
 
   deploy-prod:
     needs: deploy-staging
@@ -161,6 +167,14 @@ jobs:
 
       - name: Setup Flyctl
         uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Check required environment vars
+        run: |
+          echo "FLY_APP_NAME=${{ vars.FLY_APP_NAME }}"
+          if [ -z "${{ vars.FLY_APP_NAME }}" ]; then
+            echo "::error::Set FLY_APP_NAME in the 'production' environment."
+            exit 1
+          fi
 
       - name: Configure Fly secrets (prod)
         env:
