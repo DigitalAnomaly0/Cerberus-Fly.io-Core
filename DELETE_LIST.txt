@@ -1,5 +1,0 @@
-.github/workflows/deploy.yml
-README.md
-actions/openapi.yaml
-app/main.py
-cerberus_fly_github_repo_with_gemini_20250928T133857Z.zip
