@@ -60,4 +60,120 @@ jobs:
               "args": {
                   "topic": "CI prime",
                   "n": 2,
-                  "enable_research_
+                  "enable_research": True,
+                  "search_max": 2,
+                  "fetch_max": 0,
+                  "n_per_claim": 1
+              }
+          })
+          arts = resp.get("artifacts", [])
+          if arts:
+              b = base64.b64decode(arts[0].get("base64",""))
+              with zipfile.ZipFile(io.BytesIO(b)) as z:
+                  z.extractall("workspace")
+              print("Primed workspace with artifact contents.")
+          else:
+              print("No artifacts produced; continuing anyway.")
+          PY
+
+      - name: Run contract tests + smoke
+        env:
+          SEARCH_PROVIDER: dummy
+        run: |
+          python tests/run_all.py
+
+      - name: Upload smoke artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cerberus-contract-artifact
+          path: |
+            contract_artifact_*.zip
+            cerberus_core--RID-*.zip
+            **/contract_artifact_*.zip
+            **/cerberus_core--RID-*.zip
+
+  deploy-staging:
+    needs: test
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Configure Fly secrets (staging)
+        env:
+          FLYCTL_AUTH_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          flyctl secrets set \
+            CERBERUS_API_KEY='${{ secrets.CERBERUS_API_KEY }}' \
+            GEMINI_API_KEY='${{ secrets.GEMINI_API_KEY }}' \
+            REQUIRE_TIMESTAMP='${{ secrets.REQUIRE_TIMESTAMP }}' \
+            --app '${{ vars.FLY_APP_NAME }}'
+
+      - name: Deploy to Fly (staging)
+        env:
+          FLYCTL_AUTH_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          flyctl deploy --remote-only --app '${{ vars.FLY_APP_NAME }}'
+
+      - name: Smoke: /healthz
+        run: |
+          curl -fsS "https://${{ vars.FLY_APP_NAME }}.fly.dev/healthz"
+
+      - name: Smoke: /jobs/run
+        env:
+          API_KEY: ${{ secrets.CERBERUS_API_KEY }}
+        run: |
+          TS=$(date +%s)
+          cat > body.json <<'JSON'
+          {
+            "job_name": "core",
+            "args": {
+              "topic": "CI smoke",
+              "n": 3,
+              "enable_research": true,
+              "search_max": 6,
+              "fetch_max": 0,
+              "n_per_claim": 1,
+              "timestamp": __TS__
+            }
+          }
+          JSON
+          sed -i "s/__TS__/$TS/" body.json
+          curl -fsS -X POST "https://${{ vars.FLY_APP_NAME }}.fly.dev/jobs/run" \
+            -H "content-type: application/json" \
+            -H "X-API-Key: ${API_KEY}" \
+            --data-binary @body.json >/dev/null
+
+  deploy-prod:
+    needs: deploy-staging
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.promote_prod == 'true')
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Configure Fly secrets (prod)
+        env:
+          FLYCTL_AUTH_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          flyctl secrets set \
+            CERBERUS_API_KEY='${{ secrets.CERBERUS_API_KEY }}' \
+            GEMINI_API_KEY='${{ secrets.GEMINI_API_KEY }}' \
+            REQUIRE_TIMESTAMP='${{ secrets.REQUIRE_TIMESTAMP }}' \
+            --app '${{ vars.FLY_APP_NAME }}'
+
+      - name: Deploy to Fly (prod)
+        env:
+          FLYCTL_AUTH_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          flyctl deploy --remote-only --app '${{ vars.FLY_APP_NAME }}'
