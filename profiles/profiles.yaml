@@ -1,0 +1,15 @@
+baseline:
+  enable_research: true
+  search_max: 6
+  fetch_max: 1
+  n_per_claim: 2
+micro_iterations:
+  enable_research: true
+  search_max: 4
+  fetch_max: 0
+  n_per_claim: 1
+heavy_verification:
+  enable_research: true
+  search_max: 10
+  fetch_max: 5
+  n_per_claim: 3

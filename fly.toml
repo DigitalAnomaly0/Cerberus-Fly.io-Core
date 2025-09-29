@@ -1,16 +1,20 @@
-app = "fly-io-integration"
-primary_region = "ord"
+
+# Fly.io config — update `app` to your unique app name before deploy
+app = "cerberus-skn-z9t6k1m2q7vp"
+primary_region = "dfw"
 
 [build]
   dockerfile = "Dockerfile"
 
 [env]
   PORT = "8080"
+  # SEARCH_PROVIDER can be 'dummy', 'serpapi', or 'bing'
+  SEARCH_PROVIDER = "dummy"
 
 [[services]]
-  protocol = "tcp"
   internal_port = 8080
   processes = ["app"]
+  protocol = "tcp"
 
   [[services.ports]]
     handlers = ["http"]
@@ -20,17 +24,7 @@ primary_region = "ord"
     handlers = ["tls", "http"]
     port = 443
 
-  [services.concurrency]
-    hard_limit = 50
-    soft_limit = 25
-
-  [[services.http_checks]]
-    interval = "10s"
-    timeout = "5s"
+  [[services.tcp_checks]]
+    interval = "30s"
+    timeout = "3s"
     grace_period = "30s"
-    method = "GET"
-    path = "/health"
-
-[[vm]]
-  size = "shared-cpu-1x"
-  memory = "512mb"

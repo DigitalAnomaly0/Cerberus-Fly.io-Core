@@ -1,5 +1,6 @@
-fastapi==0.115.0
-uvicorn[standard]==0.30.6
-pydantic==2.9.2
-starlette==0.38.5
-python-multipart==0.0.9
+
+fastapi>=0.112.0,<1.0.0
+uvicorn[standard]>=0.30.0,<1.0.0
+# Optional: enable real search providers in production by adding their SDKs here
+# azure-cognitiveservices-search-websearch
+# serpapi
