@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  workflow_dispatch:
+    inputs:
+      promote_prod:
+        description: 'Deploy to production (bypass tag)?'
+        type: boolean
+        default: false
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install test deps (optional)
+        run: |
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Run contract tests
+        env:
+          SEARCH_PROVIDER: dummy
+        run: |
+          python tests/run_all.py
+
+      - name: Upload smoke artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cerberus-contract-artifact
+          path: |
+            contract_artifact_*.zip
+            cerberus_core--RID-*.zip
+            **/contract_artifact_*.zip
+            **/cerberus_core--RID-*.zip
+
+deploy-staging:
+  needs: test
+  if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+  runs-on: ubuntu-latest
+  environment: staging
+  steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup Flyctl
+      uses: superfly/flyctl-actions/setup-flyctl@master
+
+    - name: Configure Fly secrets (staging)
+      env:
+        FLYCTL_AUTH_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      run: |
+        flyctl secrets set               CERBERUS_API_KEY='${{ secrets.CERBERUS_API_KEY }}'               GEMINI_API_KEY='${{ secrets.GEMINI_API_KEY }}'               REQUIRE_TIMESTAMP='${{ secrets.REQUIRE_TIMESTAMP }}'               --app '${{ vars.FLY_APP_NAME }}'
+
+    - name: Deploy to Fly (staging)
+      env:
+        FLYCTL_AUTH_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      run: |
+        flyctl deploy --remote-only --app '${{ vars.FLY_APP_NAME }}' --region '${{ vars.FLY_PRIMARY_REGION }}'
+
+deploy-prod:
+  needs: deploy-staging
+  if: startsWith(github.ref, 'refs/tags/v')
+  runs-on: ubuntu-latest
+  environment: production
+  steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup Flyctl
+      uses: superfly/flyctl-actions/setup-flyctl@master
+
+    - name: Configure Fly secrets (prod)
+      env:
+        FLYCTL_AUTH_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      run: |
+        flyctl secrets set               CERBERUS_API_KEY='${{ secrets.CERBERUS_API_KEY }}'               GEMINI_API_KEY='${{ secrets.GEMINI_API_KEY }}'               REQUIRE_TIMESTAMP='${{ secrets.REQUIRE_TIMESTAMP }}'               --app '${{ vars.FLY_APP_NAME }}'
+
+    - name: Deploy to Fly (prod)
+      env:
+        FLYCTL_AUTH_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      run: |
+        flyctl deploy --remote-only --app '${{ vars.FLY_APP_NAME }}' --region '${{ vars.FLY_PRIMARY_REGION }}'
