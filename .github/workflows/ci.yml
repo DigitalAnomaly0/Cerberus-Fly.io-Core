@@ -93,11 +93,25 @@ jobs:
           API_KEY: ${{ secrets.CERBERUS_API_KEY }}
         run: |
           TS=$(date +%s)
-          BODY=$(printf '{"job_name":"core","args":{"topic":"CI smoke","n":3,"enable_research":true,"search_max":6,"fetch_max":0,"n_per_claim":1,"timestamp":%s}}' "$TS")
+          cat > body.json <<'JSON'
+          {
+            "job_name": "core",
+            "args": {
+              "topic": "CI smoke",
+              "n": 3,
+              "enable_research": true,
+              "search_max": 6,
+              "fetch_max": 0,
+              "n_per_claim": 1,
+              "timestamp": __TS__
+            }
+          }
+          JSON
+          sed -i "s/__TS__/$TS/" body.json
           curl -fsS -X POST "https://${{ vars.FLY_APP_NAME }}.fly.dev/jobs/run" \
             -H "content-type: application/json" \
             -H "X-API-Key: ${API_KEY}" \
-            -d "$BODY" >/dev/null
+            --data-binary @body.json >/dev/null
 
   deploy-prod:
     needs: deploy-staging
