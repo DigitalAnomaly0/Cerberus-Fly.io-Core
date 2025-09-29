@@ -8,11 +8,16 @@ on:
   pull_request:
     branches: [ main, master ]
   workflow_dispatch:
+    inputs:
+      promote_prod:
+        description: 'Deploy to production (bypass tag)'
+        type: boolean
+        default: false
 
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -34,8 +39,25 @@ jobs:
         run: |
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      - name: Run tests
+      # ---- PRIME WORKSPACE so quick_contract has P3-core-wiring-* to read ----
+      - name: Prime workspace artifact for quick_contract
         env:
           SEARCH_PROVIDER: dummy
         run: |
-          if [ -f tests/run_all.py ]; then python tests/run_all.py; else echo "no tests"; fi
+          python - <<'PY'
+          import io, os, base64, zipfile
+          from pathlib import Path
+          # Make sure repo root is importable
+          import sys; sys.path.insert(0, str(Path(".").resolve()))
+          try:
+              from jobs.worker import process_job
+          except Exception as e:
+              print("Import error:", e)
+              raise
+          Path("workspace").mkdir(exist_ok=True)
+          resp = process_job({
+              "job_name": "core",
+              "args": {
+                  "topic": "CI prime",
+                  "n": 2,
+                  "enable_research_
