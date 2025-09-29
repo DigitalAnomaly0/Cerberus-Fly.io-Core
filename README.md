@@ -11,3 +11,4 @@ FastAPI service for ChatGPT Actions. This build includes:
 - Variables: `FLY_APP_NAME`, `FLY_PRIMARY_REGION`
 - Action Schema: use `actions/openapi.yaml`, set `servers[0].url` to your Fly hostname.
 - Action Auth: API Key = the same value as `CERBERUS_API_KEY`.
+.
